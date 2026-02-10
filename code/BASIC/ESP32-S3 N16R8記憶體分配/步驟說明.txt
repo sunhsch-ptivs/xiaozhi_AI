@@ -1,0 +1,132 @@
+這是一份完整的操作指南，將為您的 ESP32-S3 N16R8 配置 2MB APP 空間、約 13.8MB 的 SPIFFS 空間，以及 64KB 的 Coredump 空間。
+
+
+
+
+第一步：定位 ESP32 核心路徑
+首先，您需要找到 Arduino IDE 儲存硬體定義的資料夾。
+
+開啟檔案總管，在路徑列輸入以下路徑並按 Enter： %LOCALAPPDATA%\Arduino15\packages\esp32\hardware\esp32\
+
+進入版本號資料夾（例如 3.0.1 或 2.0.x）。
+
+您會看到 tools 和 boards.txt 等檔案，這就是我們的工作目錄。
+
+
+
+
+
+
+第二步：建立分割區定義檔 (.csv)
+進入 tools/partitions/ 資料夾。
+
+在該資料夾內建立一個新檔案，命名為：my_s3_16m_2m_app.csv。
+
+使用記事本或 VS Code 開啟它，貼上以下精確的配置內容：
+
+程式碼片段
+
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xE000,   0x2000,
+app0,     app,  ota_0,   0x10000,  0x200000,
+spiffs,   data, spiffs,  0x210000, 0xDE0000,
+coredump, data, coredump,0xFF0000, 0x10000,
+
+
+
+計算原理：
+
+app0: 設為 0x200000 (剛好 2,048 KB / 2 MB)。
+
+coredump: 放在 Flash 的最後端 0xFF0000，佔用 64 KB。
+
+spiffs: 填補中間所有空隙，從 0x210000 到 0xFF0000。
+
+
+
+
+
+
+
+第三步：修改硬體描述檔 (boards.txt)
+這一步是為了讓這個新配置出現在 Arduino IDE 的選單中。
+
+回到第一步找到的根目錄，找到 boards.txt。
+
+強烈建議： 先複製一份 boards.txt.bak 作為備份。
+
+搜尋關鍵字：esp32s3.menu.PartitionScheme.default。
+
+在那一整串 Partition 列表的最後（或 default 之後），加入以下三行程式碼：
+
+Plaintext
+
+esp32s3.menu.PartitionScheme.my16m=16M Flash (2MB APP, 13.8MB SPIFFS, 64KB Coredump)
+esp32s3.menu.PartitionScheme.my16m.build.partitions=my_s3_16m_2m_app
+esp32s3.menu.PartitionScheme.my16m.upload.maximum_size=2097152
+
+
+
+
+
+
+第四步：重新載入並套用
+徹底關閉 Arduino IDE 並重新開啟。
+
+在工具列進行以下設定（參考您的硬體 N16R8）：
+
+Board: "ESP32S3 Dev Module"
+
+Flash Size: "16MB (128Mb)"
+
+PSRAM: "OPI PSRAM" (N16R8 的 R8 代表 8MB OPI PSRAM)
+
+Partition Scheme: 選擇您剛剛新增的 "16M Flash (2MB APP, 13.8MB SPIFFS, 64KB Coredump)"。
+
+
+
+=================================================================================================================
+Name	Type	SubType	Offset	Size	功能說明
+nvs	data	nvs	0x9000	0x5000	非揮發性儲存 (20KB)。用於儲存 WiFi 帳密、藍牙配對資訊或您在程式中使用 Preferences 函式庫儲存的變數。
+otadata	data	ota	0xE000	0x2000	OTA 選擇器 (8KB)。當系統支援 OTA 更新時，Bootloader 會讀取這裡的資料，決定該從哪一個 APP 分割區啟動。
+app0	app	ota_0	0x10000	0x200000	應用程式空間 (2MB)。這是您的主要程式碼存放處。0x10000 是標準的啟動偏移量。
+spiffs	data	spiffs	0x210000	0xDE0000	檔案系統 (約 13.8MB)。用於存放網頁檔案、圖片或 log。其起始位置接在 app0 的尾巴。
+coredump	data	coredump	0xFF0000	0x10000	核心轉儲 (64KB)。當程式當機（Panic）時，系統會將暫存器和記憶體狀態寫入此區，便於事後除錯。
+
+欄位背後的邏輯與計算
+為了讓您在未來調整時更有把握，這裡說明幾個關鍵點：
+
+Offset (偏移位址) 的連續性：
+
+app0 從 0x10000 開始，大小是 0x200000。
+
+所以下一個分割區 spiffs 的起始位置就是 0x10000 + 0x200000 = 0x210000。
+
+以此類推，coredump 的起始位址是 0x210000 + 0xDE0000 = 0xFF0000。
+
+16MB 的邊界檢查：
+
+您的最後一個分割區 coredump 結束於 0xFF0000 + 0x10000 = 0x1000000。
+
+十六進位的 0x1000000 正好等於十進位的 16,777,216 bytes，也就是 16MB。這代表我們完整利用了整片 Flash。
+
+對齊限制：
+
+app 分割區的 Offset 必須與 0x10000 (64KB) 對齊。
+
+所有的分割區大小與位置都建議以 0x1000 (4KB) 為最小單位（Flash 的 sector size）。
+
+
+Flash 空間分配示意圖
+0x000000 ~ 0x009000: Bootloader 與分割區表保留位。
+
+0x009000 ~ 0x010000: 系統資料 (NVS, OTA Data)。
+
+0x010000 ~ 0x210000: 您的韌體程式 (2MB)。
+
+0x210000 ~ 0xFF0000: 您的數據檔案 (13.8MB)。
+
+0xFF0000 ~ 0x1000000: 錯誤紀錄空間 (64KB)。
+
+您現在對這個配置有更清晰的理解了嗎？如果您未來需要實作 OTA 遠端更新，我們可能需要把 spiffs 縮小一點點來挪出空間給 app1 分割區，有需要進一步討論這部分嗎？
